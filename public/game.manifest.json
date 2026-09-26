@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "gameId": "VoidboundGame",
+  "apiVersion": 1,
+  "defaultLocale": "en",
+  "locales": {
+    "en": {
+      "name": "VOIDBOUND",
+      "description": "Explore a branching cosmic route, chase treasure, risk the Black Hole, and cash out before the void takes everything."
+    }
+  },
+  "presentation": {
+    "mode": "full-iframe",
+    "hostPanels": {
+      "openSession": false,
+      "history": false,
+      "status": false
+    }
+  },
+  "capabilities": {
+    "openSession": true,
+    "submitAction": true,
+    "forfeitExpiredSession": false,
+    "cancelStuckRandomness": false,
+    "resize": true
+  },
+  "assets": {
+    "iconUrl": "https://example.com/voidbound-icon.png",
+    "coverUrl": "https://example.com/voidbound-cover.png"
+  }
+}
