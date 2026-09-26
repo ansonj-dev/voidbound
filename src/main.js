@@ -1,7 +1,6 @@
 import "./style.css";
 import { createVoidboundAdapter } from "./chain/adapter.js";
 import { connectGameToHost } from "./chain/guest.js";
-import { DEFAULT_SNAPSHOT } from "./chain/types.js";
 import {
   BETS,
   NODE_DEFS,
@@ -13,15 +12,20 @@ import {
 const chainAdapter = createVoidboundAdapter();
 
 // ─── CHAIN GUEST SDK ──────────────────────────────────────────────────────────
-// Connect to Chain host (or demo fallback when running standalone)
-let hostSnapshot = { ...DEFAULT_SNAPSHOT };
+// Uses the real @chain/casino-sdk penpal bridge.
+// When embedded in Chain.wtf host: hostApi resolves to the real HostApiV1.
+// When running standalone (Vercel): penpal never resolves → falls back to demo adapter.
+let hostSnapshot = null;
 let hostApi = null;
+let hostConnected = false;
 
 const guestConnection = connectGameToHost({
-  setState(snapshot) {
+  async setState(snapshot) {
     if (!snapshot) return;
     hostSnapshot = snapshot;
-    // Update balance from smart vault if connected
+    hostConnected = true;
+
+    // Sync balance from smart vault when connected to real host
     const vaultBalance = snapshot?.balances?.smartVaultBalance;
     if (vaultBalance && snapshot?.wallet?.address) {
       const decimals = snapshot?.token?.decimals ?? 6;
@@ -31,19 +35,39 @@ const guestConnection = connectGameToHost({
         update();
       }
     }
-    // Update wallet button
+
+    // Show wallet address on connect button
     const walletAddr = snapshot?.wallet?.address;
     const connectBtn = document.querySelector("#connect");
     if (connectBtn && walletAddr) {
       connectBtn.textContent = `${walletAddr.slice(0, 6)}…${walletAddr.slice(-4)}`;
       connectBtn.classList.remove("ghost");
     }
+
+    // Update LAUNCH button label with token symbol when connected
+    const symbol = snapshot?.token?.symbol;
+    if (symbol) {
+      const wagerEl = document.querySelector("#wager");
+      if (wagerEl) wagerEl.textContent = `${state.bet} ${symbol}`;
+    }
   }
 });
 
-guestConnection.promise.then((api) => {
-  hostApi = api;
-});
+guestConnection.promise
+  .then((api) => {
+    hostApi = api;
+    hostConnected = true;
+    log("<b>CHAIN:</b> Host bridge connected. Real wallet ready.");
+    const connectBtn = document.querySelector("#connect");
+    if (connectBtn && !hostSnapshot?.wallet?.address) {
+      connectBtn.textContent = "HOST CONNECTED";
+      connectBtn.classList.remove("ghost");
+    }
+  })
+  .catch(() => {
+    // Expected when running standalone — no parent host frame
+    log("<b>VOIDBOUND:</b> Running in standalone demo mode.");
+  });
 
 const mapNodes = [
   { id: "start", x: 10, y: 58, type: "start", icon: "🚀", label: "Launch" },
@@ -78,7 +102,8 @@ let state = {
   blackDepth: 0,
   gameSeed: 0xfeedface >>> 0,
   trip: 0,
-  chainSession: null
+  chainSession: null,
+  onchainSessionId: null,  // real host session key
 };
 
 const app = document.querySelector("#app");
@@ -805,9 +830,6 @@ function begin() {
   if (state.started) return;
   if (state.balance < state.bet) { toast("Insufficient bank."); return; }
 
-  const session = chainAdapter.contract.launch({ wager: state.bet, player: "demo-wallet" });
-  state.chainSession = session;
-  state.balance    -= state.bet;
   state.started     = true;
   state.current     = "start";
   state.cargo       = 1;
@@ -815,8 +837,40 @@ function begin() {
   state.blackDepth  = 0;
   state.trip       += 1;
   state.gameSeed    = (Date.now() ^ (state.trip * 0x9e3779b9)) >>> 0;
+  state.chainSession = null;
+  state.onchainSessionId = null;
 
-  log(`<b>LAUNCH:</b> ${state.bet} U committed. Chain session ${session.gameId.slice(0, 8)} active.`);
+  if (hostApi && hostConnected) {
+    // ── REAL CHAIN HOST PATH ──
+    // Wager is in token base units (USDC = 6 decimals)
+    const decimals = hostSnapshot?.token?.decimals ?? 6;
+    const wagerBaseUnits = BigInt(Math.round(state.bet * Math.pow(10, decimals))).toString();
+
+    // gameData = empty for now (0x00 = expedition start)
+    hostApi.openSession({
+      wager: wagerBaseUnits,
+      gameData: '0x00',
+    }).then((result) => {
+      state.onchainSessionId = result.sessionKey;
+      log(`<b>CHAIN:</b> Session opened. tx: ${result.transactionHash.slice(0, 10)}…`);
+      // Deduct balance locally — host snapshot will reconcile
+      state.balance -= state.bet;
+      update();
+    }).catch((err) => {
+      state.started = false;
+      toast(`Transaction failed: ${err?.message ?? 'rejected'}`);
+      log(`<b>ERROR:</b> Session open failed — ${err?.message ?? 'wallet rejected'}`);
+      update();
+      renderNodes();
+    });
+  } else {
+    // ── STANDALONE DEMO PATH ──
+    const session = chainAdapter.contract.launch({ wager: state.bet, player: "demo-wallet" });
+    state.chainSession = session;
+    state.balance -= state.bet;
+    log(`<b>LAUNCH:</b> ${state.bet} U committed. Demo session ${session.gameId.slice(0, 8)} active.`);
+  }
+
   playSfx("launch");
   update();
   renderNodes();
@@ -1046,10 +1100,9 @@ function lose() {
   state.cargo      = 1;
   state.blackDepth = 0;
   state.chainSession = null;
+  state.onchainSessionId = null;
   log("<b>SHIP LOST:</b> expedition payout 0 U.");
   toast("The void claimed the expedition.");
-  // SFX is played by the caller (applyResult/showRisk/showBlackHole)
-  // Only play here if called directly (e.g. from black hole GO DEEPER)
   flashMap("lose");
   update();
   renderNodes();
@@ -1057,16 +1110,33 @@ function lose() {
 
 function cashout() {
   if (!state.started) return;
-  const chainPayout = state.chainSession
-    ? chainAdapter.contract.cashOut({ gameId: state.chainSession.gameId })
-    : { payout: state.bet * state.cargo };
-  const payout = chainPayout?.payout ?? state.bet * state.cargo;
+
+  let payout;
+  if (hostApi && hostConnected && state.onchainSessionId) {
+    // Real host: payout comes from the host snapshot session data
+    // Call revealOutcome so the host releases withheld balance display
+    hostApi.revealOutcome({ sessionId: state.onchainSessionId }).catch(() => {
+      // Reveal is display-only; settlement is already final on-chain
+    });
+    // Compute payout locally from cargo for immediate UI feedback
+    payout = state.bet * state.cargo;
+    log(`<b>CASH OUT:</b> Outcome revealed on-chain. Expected: ${payout.toFixed(2)} U`);
+  } else {
+    // Standalone demo path
+    const chainPayout = state.chainSession
+      ? chainAdapter.contract.cashOut({ gameId: state.chainSession.gameId })
+      : { payout: state.bet * state.cargo };
+    payout = chainPayout?.payout ?? state.bet * state.cargo;
+    log(`<b>CASH OUT:</b> ${payout.toFixed(2)} U returned to bank.`);
+  }
+
   state.balance    += payout;
   state.started     = false;
   state.cargo       = 1;
   state.blackDepth  = 0;
   state.chainSession = null;
-  log(`<b>CASH OUT:</b> ${payout.toFixed(2)} U returned to bank.`);
+  state.onchainSessionId = null;
+
   toast(`Expedition secured: ${payout.toFixed(2)} U`);
   playSfx("cashout");
   flashMap("win");
