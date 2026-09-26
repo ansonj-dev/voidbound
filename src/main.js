@@ -516,7 +516,7 @@ function buildTone({ frequency = 220, duration = 0.18, gain = 0.04, type = "sine
 // Noise burst (for explosions / rumble)
 function buildNoise({ duration = 0.3, gain = 0.03, freq = 800, q = 1, delay = 0 }) {
   const ctx = ensureAudio();
-  if (!ctx) return;
+  if (!ctx || !masterGain) return;
   const bufLen = ctx.sampleRate * (duration + 0.05);
   const buf    = ctx.createBuffer(1, bufLen, ctx.sampleRate);
   const data   = buf.getChannelData(0);
@@ -895,8 +895,11 @@ function showRisk(node, level) {
 
 function showWormhole(node) {
   const next = getNeighbours(node.id).filter((id) => id !== "start");
-  const targetId = next[Math.floor(randomUnit() * next.length)];
+  // fallback: use all neighbours if filtering removes everything
+  const pool = next.length > 0 ? next : getNeighbours(node.id);
+  const targetId = pool[Math.floor(randomUnit() * pool.length)];
   const target   = mapNodes.find((n) => n.id === targetId);
+  if (!target) { closeOverlay(); return; } // safety guard
   log(`<b>WORMHOLE:</b> spacetime folded → ${target.label}.`);
   playSfx("wormhole");
   closeOverlay();
@@ -941,9 +944,10 @@ function showBlackHole() {
   addButton(actions, "ESCAPE NOW", "", () => cashout());
   addButton(actions, state.blackDepth >= 4 ? "ENTER SINGULARITY" : "GO DEEPER", "primary", () => {
     const roll = randomUnit();
-    if (roll >= stage.survival) {
-      state.blackDepth += 1;
+    if (roll < stage.survival) {
+      // survived — apply multiplier and go deeper
       state.cargo *= stage.multiplier;
+      state.blackDepth += 1;
       log(`<b>BLACK HOLE:</b> survived ${stage.name}. Cargo: ${state.cargo.toFixed(2)}×.`);
       playSfx("blackhole-depth");
       flashMap("win");
@@ -953,6 +957,9 @@ function showBlackHole() {
       showBlackHole();
       return;
     }
+    // failed — lose
+    overlay.remove();
+    playSfx("danger");
     lose();
   });
 }
@@ -1027,7 +1034,6 @@ function visit(node) {
     playSfx("blackhole");
     addButton(actions, "ESCAPE WITH CARGO", "",        () => cashout());
     addButton(actions, "ENTER HORIZON",     "primary", () => {
-      state.blackDepth += 1;
       eventOverlay.remove();
       showBlackHole();
     });
@@ -1039,9 +1045,12 @@ function lose() {
   state.started    = false;
   state.cargo      = 1;
   state.blackDepth = 0;
+  state.chainSession = null;
   log("<b>SHIP LOST:</b> expedition payout 0 U.");
   toast("The void claimed the expedition.");
-  playSfx("danger");
+  // SFX is played by the caller (applyResult/showRisk/showBlackHole)
+  // Only play here if called directly (e.g. from black hole GO DEEPER)
+  flashMap("lose");
   update();
   renderNodes();
 }

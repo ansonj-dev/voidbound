@@ -25,7 +25,7 @@
     "resize": true
   },
   "assets": {
-    "iconUrl": "https://example.com/voidbound-icon.png",
-    "coverUrl": "https://example.com/voidbound-cover.png"
+    "iconUrl": "https://voidbound-xi.vercel.app/images/logo-mark.png",
+    "coverUrl": "https://voidbound-xi.vercel.app/images/bg-nebula.png"
   }
 }
