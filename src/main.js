@@ -86,7 +86,7 @@ app.innerHTML = `
   <div class="voidbound-shell">
     <header class="voidbound-topbar">
       <div class="voidbound-brand">
-        <span class="voidbound-mark">✦</span>
+        <span class="voidbound-mark"><img src="/images/logo-mark.png" alt="VOIDBOUND mark" /></span>
         <div>
           <h1>VOIDBOUND</h1>
           <p>Chart the unknown</p>
@@ -159,7 +159,20 @@ const mapEl = document.querySelector("#map");
 const canvas = document.querySelector("#stars");
 const ctx = canvas.getContext("2d");
 
-// ─── STARFIELD ──────────────────────────────────────────────────────────────
+// Image assets for nodes and ship
+const NODE_IMAGES = {
+  start:     null,  // launch pad — use ship image
+  planet:    '/images/node-planet.png',
+  relic:     '/images/node-relic.png',
+  blackhole: '/images/node-blackhole.png',
+  wormhole:  '/images/node-wormhole.png',
+  asteroid:  '/images/node-asteroid.png',
+  pulsar:    '/images/node-pulsar.png',
+  ruins:     '/images/node-ruins.png',
+  dead:      null,  // keep emoji for dead world
+};
+
+const SHIP_IMG = '/images/ship.png';
 
 const STAR_COUNT = 220;
 const NEBULA_COUNT = 6;
@@ -379,7 +392,15 @@ function renderNodes() {
 
       el.style.left = `${node.x}%`;
       el.style.top  = `${node.y}%`;
-      el.innerHTML  = `${node.icon}<span class="node-label">${node.label}</span>`;
+
+      // Use image if available, else emoji fallback
+      const imgSrc = NODE_IMAGES[node.type];
+      if (imgSrc) {
+        el.innerHTML = `<img src="${imgSrc}" alt="${node.label}" /><span class="node-label">${node.label}</span>`;
+      } else {
+        el.innerHTML = `${node.icon}<span class="node-label">${node.label}</span>`;
+      }
+
       el.onclick = () => visit(node);
       mapEl.appendChild(el);
     }
@@ -390,7 +411,7 @@ function renderNodes() {
   ship.className = "ship";
   ship.style.left = `${currentNode.x}%`;
   ship.style.top  = `${currentNode.y}%`;
-  ship.textContent = "🚀";
+  ship.innerHTML  = `<img src="${SHIP_IMG}" alt="ship" />`;
   mapEl.appendChild(ship);
 }
 
@@ -908,7 +929,7 @@ function showBlackHole() {
   overlay.id = "event";
   overlay.innerHTML = `
     <div class="event-card">
-      <div class="event-icon">🕳️</div>
+      <div class="event-icon"><img src="/images/node-blackhole.png" alt="Black Hole" style="width:72px;height:72px;object-fit:contain;filter:drop-shadow(0 0 18px rgba(191,145,255,.6))" /></div>
       <h2>${stage.name}</h2>
       <p>The gravitational field deepens. Escape with your cargo, or descend further into the singular void.</p>
       <div class="event-value">${stage.multiplier.toFixed(2)}× TARGET</div>
@@ -959,9 +980,13 @@ function visit(node) {
   eventOverlay.id = "event";
 
   const def = NODE_DEFS[node.type] ?? { icon: "✦", name: "Unknown Event", description: "The unknown yields to the void." };
+  const eventIconHtml = NODE_IMAGES[node.type]
+    ? `<img src="${NODE_IMAGES[node.type]}" alt="${def.name}" style="width:72px;height:72px;object-fit:contain;filter:drop-shadow(0 0 14px rgba(103,228,255,.45))" />`
+    : `<span style="font-size:46px">${def.icon}</span>`;
+
   eventOverlay.innerHTML = `
     <div class="event-card">
-      <div class="event-icon">${def.icon}</div>
+      <div class="event-icon">${eventIconHtml}</div>
       <h2>${def.name}</h2>
       <p>${def.description}</p>
       <div class="event-value">${state.cargo.toFixed(2)}× CARGO</div>
